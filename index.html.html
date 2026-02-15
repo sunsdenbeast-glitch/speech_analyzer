@@ -45,7 +45,10 @@
                         "When was the last time you helped someone?"
                     </p>
                     <p class="text-sm text-gray-600 mt-3">Click the microphone below to start</p>
-                    <p class="text-xs text-amber-600 mt-2">💡 Browser speech recognition may clean up some filler words automatically</p>
+                    <p class="text-xs text-amber-600 mt-2" id="mobileNote" style="display: none;">
+                        📱 Mobile users: Speak clearly and pause between sentences for best transcription
+                    </p>
+                    <p class="text-xs text-gray-500 mt-1">💡 Browser speech recognition may clean up some filler words automatically</p>
                 </div>
             </div>
 
@@ -210,6 +213,7 @@
         let timerInterval;
         let recordingDuration = 0;
         let isRecording = false;
+        let isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
         // DOM elements
         const micBtn = document.getElementById('micBtn');
@@ -225,35 +229,54 @@
         const resultsSection = document.getElementById('resultsSection');
         const newAnalysisBtn = document.getElementById('newAnalysisBtn');
 
+        console.log('Device type:', isMobile ? 'Mobile' : 'Desktop');
+        console.log('User Agent:', navigator.userAgent);
+
+        // Show mobile-specific note
+        if (isMobile) {
+            document.getElementById('mobileNote').style.display = 'block';
+        }
+
         // Initialize Speech Recognition
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         
         if (!SpeechRecognition) {
-            alert('Speech recognition not supported. Please use Chrome, Edge, or Safari.');
+            alert('Speech recognition not supported on this browser. Please use Chrome or Safari.');
+            console.error('Speech recognition not available');
         } else {
+            console.log('Speech recognition available');
             recognition = new SpeechRecognition();
-            recognition.continuous = true;
+            recognition.continuous = !isMobile; // Mobile works better with continuous=false
             recognition.interimResults = true;
             recognition.lang = 'en-US';
             recognition.maxAlternatives = 1;
 
+            recognition.onstart = () => {
+                console.log('✓ Speech recognition started');
+            };
+
             recognition.onend = () => {
-                // Auto-restart if still recording
-                if (isRecording) {
+                console.log('Speech recognition ended');
+                // Auto-restart if still recording (only on desktop)
+                if (isRecording && !isMobile) {
                     try {
+                        console.log('Attempting to restart recognition...');
                         recognition.start();
                     } catch (e) {
-                        console.log('Could not restart recognition');
+                        console.log('Could not restart:', e);
                     }
                 }
             };
             
             recognition.onresult = (event) => {
+                console.log('Recognition result received');
                 let interimTranscript = '';
                 let finalTranscript = '';
 
                 for (let i = event.resultIndex; i < event.results.length; i++) {
                     const text = event.results[i][0].transcript;
+                    console.log('Transcript chunk:', text, 'Final:', event.results[i].isFinal);
+                    
                     if (event.results[i].isFinal) {
                         finalTranscript += text + ' ';
                     } else {
@@ -263,16 +286,45 @@
 
                 if (finalTranscript) {
                     fullTranscript += finalTranscript;
+                    console.log('Updated full transcript length:', fullTranscript.length);
                 }
 
                 const displayText = fullTranscript + interimTranscript;
                 transcript.textContent = displayText;
                 wordCount.textContent = displayText.trim().split(/\s+/).filter(w => w).length;
+                
+                // On mobile, restart recognition after getting final result
+                if (isMobile && finalTranscript && isRecording) {
+                    setTimeout(() => {
+                        if (isRecording) {
+                            try {
+                                recognition.start();
+                                console.log('Mobile: Recognition restarted');
+                            } catch (e) {
+                                console.log('Mobile restart failed:', e);
+                            }
+                        }
+                    }, 100);
+                }
             };
 
             recognition.onerror = (event) => {
+                console.error('Speech recognition error:', event.error, event);
                 if (event.error !== 'no-speech' && event.error !== 'aborted') {
-                    console.error('Speech recognition error:', event.error);
+                    console.error('Serious error:', event.error);
+                    // Try to restart on certain errors
+                    if (isRecording && event.error === 'network') {
+                        setTimeout(() => {
+                            if (isRecording) {
+                                try {
+                                    recognition.start();
+                                    console.log('Restarted after network error');
+                                } catch (e) {
+                                    console.log('Restart failed:', e);
+                                }
+                            }
+                        }, 1000);
+                    }
                 }
             };
         }
@@ -292,6 +344,7 @@
 
         async function startRecording() {
             try {
+                console.log('Starting recording...');
                 micBtn.disabled = true;
                 status.innerHTML = '<p class="text-blue-600 font-semibold">Requesting permission...</p>';
 
@@ -304,26 +357,38 @@
                     } 
                 });
 
+                console.log('✓ Microphone access granted');
+
                 // Start recording
                 mediaRecorder = new MediaRecorder(stream);
                 mediaRecorder.start();
+                console.log('✓ MediaRecorder started');
 
-                // Start speech recognition after delay
+                // Start speech recognition
+                // On mobile, need to ensure user interaction context
                 fullTranscript = '';
+                
+                const startDelay = isMobile ? 300 : 500;
                 setTimeout(() => {
                     try {
+                        console.log('Starting speech recognition...');
                         recognition.start();
+                        console.log('✓ Recognition start called');
                     } catch (e) {
-                        console.log('Recognition error:', e);
+                        console.error('Recognition start error:', e);
+                        alert('Speech recognition failed to start: ' + e.message + '\n\nTry speaking and tapping Stop after a few seconds.');
                     }
-                }, 500);
+                }, startDelay);
 
                 // Update UI
                 isRecording = true;
                 micBtn.classList.add('recording', 'bg-red-600', 'hover:bg-red-700');
                 micBtn.classList.remove('bg-purple-600', 'hover:bg-purple-700');
                 pulseRing.classList.remove('hidden');
-                status.innerHTML = '<p class="text-red-600 font-bold text-xl">🔴 Recording...</p><p class="text-sm text-gray-500 mt-1">Speak naturally about the topic</p>';
+                
+                const mobileHint = isMobile ? '<p class="text-xs text-amber-600 mt-1">Mobile: Speak clearly and pause between sentences</p>' : '';
+                status.innerHTML = '<p class="text-red-600 font-bold text-xl">🔴 Recording...</p><p class="text-sm text-gray-500 mt-1">Speak naturally about the topic</p>' + mobileHint;
+                
                 transcriptContainer.classList.remove('hidden');
                 micBtn.disabled = false;
                 
@@ -338,7 +403,7 @@
                 
                 let errorMsg = 'Could not access microphone. ';
                 if (error.name === 'NotAllowedError') {
-                    errorMsg += 'Permission denied. Click the 🔒 icon in address bar to allow.';
+                    errorMsg += 'Permission denied. Please allow microphone access in your browser settings.';
                 } else if (error.name === 'NotFoundError') {
                     errorMsg += 'No microphone found.';
                 } else {
